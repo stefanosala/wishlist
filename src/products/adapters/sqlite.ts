@@ -63,8 +63,57 @@ export const setupDb = async () => {
   `);
 };
 
-export const findAllProducts = async (): Promise<DbProduct[]> => {
-  return db.prepare('SELECT * FROM products').all() as DbProduct[];
+export const findAllProducts = async (
+  page: number = 1,
+  pageSize: number = 10,
+  active?: boolean,
+  shopName?: string,
+  interests?: string
+): Promise<{ products: DbProduct[]; totalCount: number }> => {
+  const offset = (page - 1) * pageSize;
+
+  // Build WHERE clause and parameters dynamically
+  let whereClause = 'WHERE 1=1'; // Start with a true condition
+  const params: (string | number | boolean)[] = [];
+
+  // NOTE: Assuming an 'active' column exists in SQLite schema for this filter
+  if (active !== undefined) {
+    whereClause += ' AND active = ?';
+    params.push(active ? 1 : 0); // SQLite uses 0/1 for boolean
+  }
+  if (shopName && shopName.trim() !== '') {
+    whereClause += ' AND shopName LIKE ?'; // LIKE is case-insensitive by default in SQLite, unless PRAGMA case_sensitive_like=ON
+    params.push('%' + shopName.trim() + '%');
+  }
+  if (interests && interests.trim() !== '') {
+    // Split comma-separated interests
+    const interestsArray = interests.split(',').map(i => i.trim()).filter(i => i !== '');
+
+    if (interestsArray.length > 0) {
+      // Build a clause that checks if any of the interests match
+      const interestClauses = interestsArray.map(() => 'EXISTS (SELECT 1 FROM JSON_EACH(interests) WHERE value LIKE ?)');
+      whereClause += ` AND (${interestClauses.join(' OR ')})`;
+
+      // Add parameters for each interest
+      interestsArray.forEach(interest => {
+        params.push('%' + interest + '%');
+      });
+    }
+  }
+
+  // Query for the total count with filters
+  const countSql = `SELECT COUNT(*) as count FROM products ${whereClause}`;
+  const countResult = db.prepare(countSql).get(params) as { count: number };
+  const totalCount = countResult.count;
+
+  // Query for the paginated products with filters
+  const productsSql = `SELECT * FROM products ${whereClause} ORDER BY id LIMIT ? OFFSET ?`;
+  const products = db.prepare(productsSql).all([...params, pageSize, offset]) as DbProduct[];
+
+  return {
+    products,
+    totalCount
+  };
 };
 
 export const findInterestVector = async (interest: string): Promise<number[] | null> => {

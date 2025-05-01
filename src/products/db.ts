@@ -2,7 +2,7 @@ import sqlite from './adapters/sqlite';
 import postgres from './adapters/postgres';
 import { z } from 'zod';
 import { EmbeddingModel, FlagEmbedding } from 'fastembed';
-import { ProductVectorResult } from './types';
+import { ProductVectorResult, DbProduct } from './types';
 import pLimit from 'p-limit';
 
 const embeddingModel = await FlagEmbedding.init({
@@ -28,10 +28,21 @@ const { DATABASE_ADAPTER, SEARCH_TYPE } = z.object({
     .default(SearchType.INTERESTS),
 }).parse(process.env);
 
+// Define a typed interface for the findAllProducts function
+export interface FindAllProductsFunction {
+  (
+    page: number,
+    pageSize: number,
+    active?: boolean,
+    shopName?: string,
+    interests?: string
+  ): Promise<{ products: DbProduct[]; totalCount: number }>;
+}
+
 export const clearDb = adapters[DATABASE_ADAPTER].clearDb;
 export const clearProductVectors = adapters[DATABASE_ADAPTER].clearProductVectors;
 export const setupDb = adapters[DATABASE_ADAPTER].setupDb;
-export const findAllProducts = adapters[DATABASE_ADAPTER].findAllProducts;
+export const findAllProducts = adapters[DATABASE_ADAPTER].findAllProducts as FindAllProductsFunction;
 export const findInterestVector = adapters[DATABASE_ADAPTER].findInterestVector;
 export const findProducts = async (interests: string[], priceMin: number = 0, priceMax: number = Number.MAX_SAFE_INTEGER): Promise<ProductVectorResult[]> => {
   const s = new Date();
@@ -82,7 +93,7 @@ export const findProducts = async (interests: string[], priceMin: number = 0, pr
     if (!storeProducts.has(product.shopName)) {
       storeProducts.set(product.shopName, []);
     }
-    if (storeProducts.get(product.shopName)!.length < 5) {
+    if (storeProducts.get(product.shopName)!.length < 3) {
       storeProducts.get(product.shopName)!.push(product);
     }
   });
@@ -90,8 +101,8 @@ export const findProducts = async (interests: string[], priceMin: number = 0, pr
   // Flatten the products back into a single array
   const limitedProducts = Array.from(storeProducts.values()).flat();
 
-  // Shuffle products in buckets of 10 to add some randomness
-  const bucketSize = 10;
+  // Shuffle products in buckets of 50 to add some randomness
+  const bucketSize = 50;
   const shuffledProducts: ProductVectorResult[] = [];
 
   for (let i = 0; i < limitedProducts.length; i += bucketSize) {

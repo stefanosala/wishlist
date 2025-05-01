@@ -4,7 +4,7 @@ import { DbProduct } from '@/products/types';
 
 await clearProductVectors();
 
-const products = await findAllProducts();
+const { products } = await findAllProducts(1, Number.MAX_SAFE_INTEGER);
 
 const limit = pLimit(10);
 

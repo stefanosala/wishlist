@@ -6,7 +6,7 @@ import { DbProduct } from '@/products/types';
 await postgresAdapter.clearDb();
 await postgresAdapter.setupDb();
 
-const sqliteProducts = await sqliteAdapter.findAllProducts();
+const { products: sqliteProducts } = await sqliteAdapter.findAllProducts(1, Number.MAX_SAFE_INTEGER);
 
 const limit = pLimit(10);
 

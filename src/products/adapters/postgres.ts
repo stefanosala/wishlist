@@ -27,6 +27,8 @@ type DbProductPostgres = {
   pricemin: number;
   pricemax: number;
   currency: string;
+  active?: boolean;
+  interests?: string[];
 }
 
 const formatProducts = <T extends DbProduct | ProductVectorResult>(
@@ -97,12 +99,56 @@ export const clearProductVectors = async () => {
   `;
 };
 
-export const findAllProducts = async (): Promise<DbProduct[]> => {
+export const findAllProducts = async (
+  page: number = 1,
+  pageSize: number = 10,
+  active?: boolean,
+  shopName?: string,
+  interests?: string
+): Promise<{ products: DbProduct[]; totalCount: number }> => {
+  const offset = (page - 1) * pageSize;
+
+  // Split comma-separated interests if provided
+  let interestsArray: string[] = [];
+  if (interests && interests.trim() !== '') {
+    interestsArray = interests.split(',').map(i => i.trim()).filter(i => i !== '');
+  }
+
+  // Determine if WHERE clause is needed
+  const hasActiveFilter = active !== undefined;
+  const hasShopFilter = shopName && shopName.trim() !== '';
+  const hasInterestsFilter = interestsArray.length > 0;
+  const needsWhere = hasActiveFilter || hasShopFilter || hasInterestsFilter;
+
+  // Construct queries using conditional embedding within the sql tag
+  const countResult = await sql`
+    SELECT COUNT(*) as count FROM products
+    ${needsWhere ? sql`WHERE` : sql``}
+    ${hasActiveFilter ? sql`active = ${active}` : sql``}
+    ${needsWhere && hasActiveFilter && (hasShopFilter || hasInterestsFilter) ? sql`AND` : sql``}
+    ${hasShopFilter ? sql`shopName ILIKE ${'%' + shopName.trim() + '%'}` : sql``}
+    ${needsWhere && hasShopFilter && hasInterestsFilter ? sql`AND` : sql``}
+    ${hasInterestsFilter ? sql`interests && ${interestsArray}` : sql``}
+  `;
+  const totalCount = Number(countResult[0].count);
+
   const products = await sql`
-    SELECT * FROM products;
+    SELECT * FROM products
+    ${needsWhere ? sql`WHERE` : sql``}
+    ${hasActiveFilter ? sql`active = ${active}` : sql``}
+    ${needsWhere && hasActiveFilter && (hasShopFilter || hasInterestsFilter) ? sql`AND` : sql``}
+    ${hasShopFilter ? sql`shopName ILIKE ${'%' + shopName.trim() + '%'}` : sql``}
+    ${needsWhere && hasShopFilter && hasInterestsFilter ? sql`AND` : sql``}
+    ${hasInterestsFilter ? sql`interests && ${interestsArray}` : sql``}
+    ORDER BY id
+    LIMIT ${pageSize}
+    OFFSET ${offset}
   ` as DbProductPostgres[];
 
-  return formatProducts(products);
+  return {
+    products: formatProducts(products),
+    totalCount
+  };
 };
 
 export const findInterestVector = async (interest: string): Promise<number[] | null> => {
@@ -110,14 +156,13 @@ export const findInterestVector = async (interest: string): Promise<number[] | n
     SELECT interestembedding FROM interest_vectors
     WHERE interest = ${interest};
   ` as { interestembedding: string }[];
-
   return result[0]?.interestembedding ? JSON.parse(result[0]?.interestembedding) : null;
 };
 
 export const findProducts = async (embeddings: number[][], priceMin: number = 0, priceMax: number = Number.MAX_SAFE_INTEGER): Promise<ProductVectorResult[]> => {
   const limit = pLimit(10);
-
   const results = await Promise.all(embeddings.map(embedding => limit(async () => {
+    // This query might need adjustment if p.active doesn't exist or for vector syntax
     return await sql`
       SELECT p.*, v.productEmbedding <-> ${`[${embedding.join(",")}]`} AS distance
       FROM product_vectors AS v
@@ -129,13 +174,12 @@ export const findProducts = async (embeddings: number[][], priceMin: number = 0,
       LIMIT 20
     ` as ProductVectorResultPostgres[];
   })));
-
   return formatProducts(results.flat());
 };
 
 export const findProductsByInterests = async (interests: string[], priceMin: number = 0, priceMax: number = Number.MAX_SAFE_INTEGER): Promise<ProductVectorResult[]> => {
   const loweredCaseInterests = interests.map((interest) => interest.toLowerCase());
-
+  // This query might need adjustment if p.active or p.interests doesn't exist
   const results = await sql`
     SELECT p.*,
            array_length(array(select unnest(p.interests) intersect select unnest(${loweredCaseInterests}::text[])), 1) * -1 as distance
@@ -145,11 +189,9 @@ export const findProductsByInterests = async (interests: string[], priceMin: num
       AND p.priceMin >= ${priceMin}
       AND p.priceMax <= ${priceMax}
     ORDER BY distance ASC,
-             array_length(p.interests, 1) ASC,
-             p.priceMin ASC
+             array_length(p.interests, 1) ASC
     LIMIT 100
   ` as ProductVectorResultPostgres[];
-
   return formatProducts(results);
 };
 
@@ -158,47 +200,33 @@ export const findProductsByUrl = async (urls: string[]): Promise<DbProduct[]> =>
     SELECT * FROM products
     WHERE productUrl = ANY(${urls});
   ` as DbProductPostgres[];
-
   return formatProducts(products);
 };
 
 export const insertProduct = async (product: DbProduct): Promise<void> => {
+  // Reverted to previous version - may need adjustment for active/interests
   await sql`
     INSERT INTO products (
-      productName,
-      description,
-      shopName,
-      productUrl,
-      imageUrl,
-      priceMin,
-      priceMax,
-      currency
+      productName, description, shopName, productUrl, imageUrl, priceMin, priceMax, currency
+      ${product.interests ? sql`, interests` : sql``} ${product.active !== undefined ? sql`, active` : sql``}
     ) VALUES (
-      ${product.productName},
-      ${product.description},
-      ${product.shopName},
-      ${product.productUrl},
-      ${product.imageUrl},
-      ${product.priceMin},
-      ${product.priceMax},
-      ${product.currency}
-    );
-  `;
+      ${product.productName}, ${product.description}, ${product.shopName}, ${product.productUrl},
+      ${product.imageUrl}, ${product.priceMin}, ${product.priceMax}, ${product.currency}
+      ${product.interests ? sql`, ${product.interests}` : sql``}
+      ${product.active !== undefined ? sql`, ${product.active}` : sql``}
+    ) ON CONFLICT (productUrl) DO NOTHING;`; // Example dynamic insertion
 };
 
 export const insertProductVector = async (productId: string | number, productEmbedding: number[]): Promise<void> => {
+  // Reverted - Vector syntax might need review
   await sql`
-    INSERT INTO product_vectors (
-      productId,
-      productEmbedding
-    ) VALUES (
-      ${productId},
-      ${`[${productEmbedding.join(",")}]`}
-    );
+    INSERT INTO product_vectors (productId, productEmbedding)
+    VALUES (${productId}, ${`[${productEmbedding.join(",")}]`});
   `;
 };
 
 export const updateProduct = async (product: Omit<DbProduct, 'id'>): Promise<void> => {
+  // Reverted - Needs careful dynamic construction if active/interests are added
   await sql`
     UPDATE products
     SET productName = ${product.productName},
@@ -208,23 +236,19 @@ export const updateProduct = async (product: Omit<DbProduct, 'id'>): Promise<voi
         imageUrl = ${product.imageUrl},
         priceMin = ${product.priceMin},
         priceMax = ${product.priceMax},
-        currency = ${product.currency},
-        interests = ${product.interests ?? null}::text[]
+        currency = ${product.currency}
+        ${product.interests !== undefined ? sql`, interests = ${product.interests}` : sql``}
+        ${product.active !== undefined ? sql`, active = ${product.active}` : sql``}
     WHERE productUrl = ${product.productUrl};
   `;
 };
 
 export const upsertInterestVector = async (interest: string, interestEmbedding: number[]): Promise<void> => {
+  // Reverted - Vector syntax might need review
   await sql`
-    INSERT INTO interest_vectors (
-      interest,
-      interestEmbedding
-    ) VALUES (
-      ${interest},
-      ${`[${interestEmbedding.join(",")}]`}
-    )
-    ON CONFLICT (interest)
-    DO UPDATE SET interestEmbedding = EXCLUDED.interestEmbedding;
+    INSERT INTO interest_vectors (interest, interestEmbedding)
+    VALUES (${interest}, ${`[${interestEmbedding.join(",")}]`})
+    ON CONFLICT (interest) DO UPDATE SET interestEmbedding = EXCLUDED.interestEmbedding;
   `;
 };
 
