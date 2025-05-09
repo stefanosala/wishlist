@@ -87,6 +87,9 @@ export const findProducts = async (interests: string[], priceMin: number = 0, pr
       index === self.findIndex((t) => t.id === result.id)
     );
 
+  // Shuffle products and return
+  return products.sort(() => Math.random() - 0.5);
+
   // Group products by store and limit to 5 per store
   const storeProducts = new Map<string, ProductVectorResult[]>();
   products.forEach(product => {

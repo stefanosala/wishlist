@@ -1,4 +1,4 @@
-import { DbProduct, ProductVectorResult } from "../types";
+import { DbProduct, Product, ProductVectorResult } from "../types";
 import { neon } from "@neondatabase/serverless";
 import pLimit from "p-limit";
 import { z } from "zod";
@@ -73,7 +73,7 @@ export const setupDb = async () => {
       imageUrl TEXT,
       priceMin FLOAT,
       priceMax FLOAT,
-      currency TEXT
+      currency TEXT,
       interests TEXT[]
     )
   `;
@@ -89,6 +89,21 @@ export const setupDb = async () => {
     CREATE TABLE IF NOT EXISTS interest_vectors (
       interest TEXT UNIQUE,
       interestEmbedding vector(384)
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS gift_ideas (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
+      productName TEXT,
+      description TEXT,
+      shopName TEXT,
+      productUrl TEXT UNIQUE,
+      imageUrl TEXT,
+      priceMin FLOAT,
+      priceMax FLOAT,
+      currency TEXT,
+      interests TEXT[]
     )
   `;
 };
@@ -183,7 +198,7 @@ export const findProductsByInterests = async (interests: string[], priceMin: num
   const results = await sql`
     SELECT p.*,
            array_length(array(select unnest(p.interests) intersect select unnest(${loweredCaseInterests}::text[])), 1) * -1 as distance
-    FROM products AS p
+    FROM gift_ideas AS p
     WHERE p.active = true
       AND p.interests && ${loweredCaseInterests}::text[]
       AND p.priceMin >= ${priceMin}
@@ -249,6 +264,48 @@ export const upsertInterestVector = async (interest: string, interestEmbedding: 
     INSERT INTO interest_vectors (interest, interestEmbedding)
     VALUES (${interest}, ${`[${interestEmbedding.join(",")}]`})
     ON CONFLICT (interest) DO UPDATE SET interestEmbedding = EXCLUDED.interestEmbedding;
+  `;
+};
+
+export const findGiftIdeaByUrl = async (url: string): Promise<Product | null> => {
+  const result = await sql`
+    SELECT * FROM gift_ideas
+    WHERE productUrl = ${url};
+  ` as Product[];
+  return result[0] ?? null;
+};
+
+export const insertGiftIdea = async (giftIdea: Product): Promise<void> => {
+  await sql`
+    INSERT INTO gift_ideas (
+      productName,
+      description,
+      shopName,
+      productUrl,
+      imageUrl,
+      priceMin,
+      priceMax,
+      currency
+      ${giftIdea.interests ? sql`, interests` : sql``}
+    ) VALUES (
+      ${giftIdea.productName},
+      ${giftIdea.description},
+      ${giftIdea.shopName},
+      ${giftIdea.productUrl},
+      ${giftIdea.imageUrl},
+      ${giftIdea.priceMin},
+      ${giftIdea.priceMax},
+      ${giftIdea.currency}
+      ${giftIdea.interests ? sql`, ${giftIdea.interests}` : sql``}
+    );
+  `;
+};
+
+export const updateGiftIdeaInterests = async (url: string, interests: string[]): Promise<void> => {
+  await sql`
+    UPDATE gift_ideas
+    SET interests = ${interests}
+    WHERE productUrl = ${url};
   `;
 };
 
